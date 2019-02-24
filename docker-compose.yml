@@ -1,0 +1,85 @@
+version: "3"
+
+services:
+  web:
+    build:
+      context: .
+      args:
+        - DJANGO_SETTINGS_MODULE=openweather.settings
+    environment:
+      - DJANGO_SETTINGS_MODULE=openweather.settings
+    links:
+      - db:localdb
+      - rabbit:localrabbit
+    depends_on:
+      - db
+      - rabbit
+      - worker
+    expose:
+      - "8000"
+    volumes:
+      - .:/app
+    command: bash -c "npm run build && python3 manage.py migrate --noinput && python3 manage.py collectstatic --noinput && gunicorn --reload --workers 1 --bind :8000 web_uploader.wsgi --log-level DEBUG --timeout 300"
+
+  db:
+    image: postgres:9.6
+    environment:
+      - PGDATA=/data
+      - POSTGRES_PASSWORD=openweather
+      - POSTGRES_USER=openweather
+      - POSTGRES_DB=openweather
+    volumes:
+      - /docker/reader:/data/
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - DJANGO_SETTINGS_MODULE=openweather.settings
+    environment:
+      - DJANGO_SETTINGS_MODULE=openweather.settings
+    command: celery worker -A openweather.reader -n worker --loglevel=INFO
+    volumes:
+      - .:/app
+    links:
+      - db:localdb
+      - rabbit:localrabbit
+    depends_on:
+      - rabbit
+
+  beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - DJANGO_SETTINGS_MODULE=openweather.settings
+    environment:
+      - DJANGO_SETTINGS_MODULE=openweather.settings
+    command: celery beat -A openweather.reader --loglevel=INFO
+    volumes:
+      - .:/app
+    links:
+      - db:localdb
+      - rabbit:localrabbit
+    depends_on:
+      - rabbit
+
+  rabbit:
+    image: rabbitmq:3.6.9
+    expose:
+      - "5672"
+      - "15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: "openweather"
+      RABBITMQ_DEFAULT_PASS: "openweather"
+      RABBITMQ_DEFAULT_VHOST: "openweather"
+
+  nginx:
+    image: nginx:1.14.2
+    ports:
+      - "80:80"
+    volumes:
+      - ./static:/app/static
+    links:
+      - web:web
